@@ -81,7 +81,7 @@ def download_video(url, video_number):
 
 def capture_random_frames(video_path, video_number, num_frames=5):
     """
-    Capture random frames from a video
+    Capture random frames from a video with minimum time separation.
     
     Returns:
     bool: True if successful, False otherwise
@@ -96,35 +96,61 @@ def capture_random_frames(video_path, video_number, num_frames=5):
         # Get video properties
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps if fps > 0 else 0
         
-        if frame_count <= 0:
-            logger.error(f"Invalid frame count for video {video_number}: {frame_count}")
+        if not (fps > 0 and frame_count > 0):
+            logger.error(f"Invalid FPS ({fps}) or frame count ({frame_count}) for video {video_number}")
             cap.release()
             return False
+
+       
+
+        min_separation_seconds = 10
+        min_frame_separation = int(min_separation_seconds * fps)
+        frame_indices = []
+
+        # Check if the video is long enough for the requested separation
+        required_frame_span = (num_frames - 1) * min_frame_separation
+        if frame_count < required_frame_span:
+            logger.warning(f"Video {video_number} is too short for 10s separation. Spacing frames evenly.")
+            # Fallback to evenly spacing the frames if the video is too short
+            if frame_count >= num_frames:
+                frame_indices = [int(i * (frame_count - 1) / (num_frames - 1)) for i in range(num_frames)]
+            else:
+                frame_indices = list(range(frame_count)) # Just take all frames if fewer than requested
+        else:
+            # Iteratively find random frames with the minimum required separation
+            max_attempts = 200  # Prevents an infinite loop
+            for _ in range(max_attempts):
+                if len(frame_indices) >= num_frames:
+                    break
+                
+                new_frame_index = random.randint(0, frame_count - 1)
+                
+                # Check if it's far enough from all other existing frame indices
+                is_valid = all(abs(new_frame_index - idx) >= min_frame_separation for idx in frame_indices)
+                
+                if is_valid:
+                    frame_indices.append(new_frame_index)
+
+            if len(frame_indices) < num_frames:
+                logger.warning(f"Could only find {len(frame_indices)}/{num_frames} frames with 10s separation for video {video_number}")
+
         
+
         # Ensure the output directory exists
         frame_dir = os.path.join(OUTPUT_DIR, str(video_number))
         ensure_dir_exists(frame_dir)
         
-        # Choose random timestamps
-        if frame_count < num_frames:
-            # If video has fewer frames than requested, use evenly spaced frames
-            frame_indices = [int(i * frame_count / num_frames) for i in range(num_frames)]
-        else:
-            # Otherwise, choose random frames
-            frame_indices = sorted(random.sample(range(frame_count), num_frames))
-        
         # Extract and save frames
-        for i, frame_idx in enumerate(frame_indices, 1):
+        for i, frame_idx in enumerate(sorted(frame_indices), 1):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if ret:
                 output_path = os.path.join(frame_dir, f"{video_number}_{i}.jpg")
                 cv2.imwrite(output_path, frame)
-                logger.info(f"Saved frame {i} for video {video_number}")
+                logger.info(f"Saved frame {i} for video {video_number} at index {frame_idx}")
             else:
-                logger.warning(f"Failed to extract frame {i} for video {video_number}")
+                logger.warning(f"Failed to extract frame {i} for video {video_number} at index {frame_idx}")
         
         cap.release()
         return True
